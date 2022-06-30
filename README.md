@@ -1,7 +1,7 @@
 # CallStackSpoofer
 
 This repository demonstrates a PoC implementation to spoof arbitrary call stacks when making system calls. For a full technical walkthrough please see
-the accompanying blog post here: https://labs.withsecure.com/blog/making-system-calls-with-spoofed-call-stacks.
+the accompanying blog post here: https://labs.withsecure.com/blog/spoofing-call-stacks-to-confuse-edrs.
 
 By default it contains three sample call stacks to mimic, which can be selected via supplying either `--wmi`, `--rpc`, or `--svchost`, as demonstrated below:
 
